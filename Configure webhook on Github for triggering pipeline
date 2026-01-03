@@ -1,0 +1,20 @@
+plugin for webhook -> Generic webhook trigger
+
+go to pipeline -> configure pipeline 
+
+in triggers tab go to generic webhook trigger
+Postcontentparameters -> Variable ->ref
+Exreession -> select jsonpath -> $.ref
+
+Token ->
+Devops123 / or configure token credential
+
+Configure optional filter :
+Expression : refs/heads/branch_name
+Text: $ref
+
+Then go to Github repository settings -> go to webhooks -> add webhook
+
+http://JENKINS_URL/generic-webhook-trigger/invoke?token=Devops123 -> enter this url in payload url field
+
+content-type -> application/json -> and setup the push event
