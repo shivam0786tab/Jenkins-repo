@@ -1,0 +1,122 @@
+flow of ci pipeline ->
+
+git checkout ----->  compilation of code(checking syntax errors) ----> git-leaks(if any security vuln is found in code) ----> trivy fs scan (scan all the vulnerebilities in the pom.xml)
+and will also generate report (will check from the db to show that what dependencyies you are using and whether they are good to use or not) --->> unit testing ---->
+sonarqube analysis (static code analysis) ----> quality gate check --->>build docker image -->> push docker image to the image registry
+
+pipeline {
+    agent any
+
+    tools {
+        nodejs 'nodejs23'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git branch: 'dev', url: '' , credentialsId: 'your-credentials-id'
+            }
+        }
+        stage('Frontend Code Compilation') {
+            steps {
+                dir ('client') {
+                    sh 'find . -name "*.js" -exec node --check {} +;'
+                }
+            }
+        }
+        stage('Backend Code Compilation') {
+            steps {
+                dir ('api') {
+                    sh 'find . -name "*.js" -exec node --check {} +;'
+                }
+            }
+        }
+        // for git-leaks scan , install on ubuntu using below commands -> sudo apt-get install git-leaks -y
+        stage('Git Leaks Scan') {
+            steps {
+                sh 'git-leaks detect --source=./client --exit-code 1'
+                sh 'git-leaks detect --source=./api ---exit-code 1'
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh '''
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=your-project-key \
+                        -Dsonar.projectName=your-project-name
+                    '''
+                }
+            }
+        }
+        stage('Quality Gate Check') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: true , credentialsId: 'sonar-token'
+                }
+            }
+        }
+        stage('Trivy FS Scan') {
+            steps {
+                sh 'trivy fs --exit-code 1 --severity HIGH,CRITICAL --format table --output trivy-report.html .'
+            }
+        }
+        stage('Build and Tag Docker Backend Image'){
+            steps {
+                script {
+                    withDockerRegisry(credentialsId: ''){
+                        dir('api'){
+                            sh 'docker build -t your-backend-image:latest .'
+                            sh 'docker tag your-backend-image:latest your-registry/your-backend-image:latest'
+                            sh 'trivy image --format table --output trivy-backend-report.html your-registry/your-backend-image:latest'
+                            sh 'docker push your-registry/your-backend-image:latest'
+                        }
+                    }
+                }
+            }
+        }
+        stage('Build and Tag Docker frontend Image'){
+            steps {
+                script {
+                    withDockerRegisry(credentialsId: ''){
+                        dir('client'){
+                            sh 'docker build -t your-frontend-image:latest .'
+                            sh 'docker tag your-frontend-image:latest your-registry/your-frontend-image:latest'
+                            sh 'trivy image --format table --output trivy-frontend-report.html your-registry/your-frontend-image:latest'
+                            sh 'docker push your-registry/your-frontend-image:latest'
+                        }
+                    }
+                }
+            }
+        }
+        stage('K8-deploy') {
+            steps {
+                script {
+                    withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8-token', namespace: 'dev', restrictKubeConfigAccess: false, serverUrl: 'https://042CDFB283295491DDF7A7A422346F3B.gr7.ap-south-1.eks.amazonaws.com') {
+                            sh 'kubectl apply -f k8s/sc.yaml -n dev'
+                            sh 'kubectl apply -f k8s/mysql.yaml -n dev'
+                            sh 'kubectl apply -f k8s/backend.yaml -n dev'
+                            sh 'kubectl apply -f k8s/frontend.yaml -n dev'
+                            sleep 30
+                        }
+                }
+            }
+        }
+        stage('verify-K8-deploy') {
+            steps {
+                script {
+                    withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8-token', namespace: 'dev', restrictKubeConfigAccess: false, serverUrl: 'https://042CDFB283295491DDF7A7A422346F3B.gr7.ap-south-1.eks.amazonaws.com') {
+                            sh 'kubectl get pods -n dev'
+                            sh 'kubectl get svc -n dev'
+                            
+                        }
+                }
+            }
+        }
+
+    }
+}
